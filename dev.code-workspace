@@ -1,0 +1,31 @@
+{
+  "folders": [
+    {
+      "name": "💻 前端 (Vue 3大屏)",
+      "path": "frontend-vue"
+    },
+    {
+      "name": "⚙️ 后端 (FastAPI引擎)",
+      "path": "backend-fastapi"
+    },
+    {
+      "name": "📁 项目根目录",
+      "path": "."
+    }
+  ],
+  "settings": {
+    "editor.formatOnSave": true,
+    
+    // 自动为后端指定虚拟环境（如果你的系统是 Windows，请把 bin 改为 Scripts）
+    "python.defaultInterpreterPath": "${workspaceFolder:📁 项目根目录}/venv/bin/python",
+    
+    // 只隐藏虚拟环境和 Python 运行时的缓存文件，绝对不隐藏你的代码
+    "files.exclude": {
+      "venv/": true,
+      "**/__pycache__": true,
+      "**/.pytest_cache": true
+    },
+    
+    "volar.inlayHints.missingProps": true
+  }
+}
