@@ -1,4 +1,9 @@
 #uvicorn main:app --reload
+from sqlalchemy.orm import Session
+from fastapi import Depends
+from app.core.database import get_db
+from app.models.camera import Camera as DBCamera
+from app.schemas.camera_schema import CameraCreate, CameraResponse
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -30,23 +35,6 @@ app.add_middleware(
 
 app.include_router(api_router, prefix="/api")
 llm_client = SecurityVLMClient()
-
-# ==========================================
-# 0. 模拟数据库表 (供动态增删改查)
-# ==========================================
-# 这里默认内置4个测试流，后续前端的所有增删改都在这个字典上操作
-DB_CAMERAS = {
-    1: {"id": 1, "name": "Cam-01 南门主干道", "url": "rtsp://admin:password@192.168.1.100:554/Streaming/Channels/101"},
-    2: {"id": 2, "name": "Cam-02 生产车间A区", "url": "rtsp://admin:password@192.168.1.101:554/Streaming/Channels/101"},
-    3: {"id": 3, "name": "Cam-03 西门入口", "url": "rtsp://admin:password@192.168.1.102:554/Streaming/Channels/101"},
-    4: {"id": 4, "name": "Cam-04 办公区走廊", "url": "rtsp://admin:password@192.168.1.103:554/Streaming/Channels/101"}
-}
-NEXT_CAM_ID = 5
-
-# Pydantic 模型用于接收前端表单数据
-class CameraCreate(BaseModel):
-    name: str
-    url: str
 
 # ==========================================
 # 1. 支持“热插拔”的视频流引擎
@@ -121,76 +109,84 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect: manager.disconnect(websocket)
 
 async def ai_analysis_task():
+    """后台任务：根据每个摄像头的抽帧时间独立进行分析"""
     while True:
-        await asyncio.sleep(4) 
-        # 遍历所有当前正在运行的摄像头
-        for cam_id, frame_bytes in list(stream_manager.frames.items()):
-            if not frame_bytes: continue
-            cam_info = DB_CAMERAS.get(cam_id)
-            if not cam_info: continue
-            
-            loop = asyncio.get_event_loop()
-            try:
-                result = await loop.run_in_executor(None, llm_client.analyze_frame, frame_bytes, cam_info["name"])
-                if result and result.get("has_issue"):
-                    base64_img = f"data:image/jpeg;base64,{base64.b64encode(frame_bytes).decode('utf-8')}"
-                    for issue in result.get("alerts", []):
-                        await manager.broadcast(json.dumps({
-                            "type": "alert",
-                            "alert": {
-                                "id": str(uuid.uuid4())[:8], "time": datetime.now().strftime("%H:%M:%S"),
-                                "camera": cam_info["name"], "type": issue.get("issue_type", "安全隐患"),
-                                "desc": issue.get("issue_description", ""), "img": base64_img
-                            }
-                        }))
-            except Exception: pass
+        await asyncio.sleep(1) # 每秒醒来一次，检查谁该抽帧了
+        
+        # 为了不频繁查库，我们可以每次通过独立的 Session 查询配置
+        db = next(get_db())
+        cameras = db.query(DBCamera).filter(DBCamera.is_active == True).all()
+        current_time = int(time.time())
+        
+        for cam in cameras:
+            # 只有当当前时间是 capture_interval 的整数倍时才执行抽帧
+            if current_time % cam.capture_interval == 0:
+                frame_bytes = stream_manager.frames.get(cam.id)
+                if not frame_bytes: 
+                    continue
+                
+                loop = asyncio.get_event_loop()
+                try:
+                    result = await loop.run_in_executor(None, llm_client.analyze_frame, frame_bytes, cam.name)
+                    if result and result.get("has_issue"):
+                        base64_img = f"data:image/jpeg;base64,{base64.b64encode(frame_bytes).decode('utf-8')}"
+                        for issue in result.get("alerts", []):
+                            await manager.broadcast(json.dumps({
+                                "type": "alert",
+                                "alert": {
+                                    "id": str(uuid.uuid4())[:8], "time": datetime.now().strftime("%H:%M:%S"),
+                                    "camera": cam.name, "type": issue.get("issue_type", "安全隐患"),
+                                    "desc": issue.get("issue_description", ""), "img": base64_img
+                                }
+                            }))
+                except Exception as e: 
+                    print(f"[{cam.name}] 分析错误: {e}")
+        db.close()
 
-# ==========================================
-# 3. 核心 API：真正的增删改查
-# ==========================================
+
 @app.on_event("startup")
 async def startup_event():
-    # 启动数据库中所有的摄像头
-    for cam_id, cam in DB_CAMERAS.items():
-        stream_manager.start_camera(cam_id, cam["name"], cam["url"])
+    # 启动时，从真实的 MySQL 数据库读取所有激活的摄像头并开始拉流！
+    db = next(get_db())
+    cameras = db.query(DBCamera).filter(DBCamera.is_active == True).all()
+    for cam in cameras:
+        stream_manager.start_camera(cam.id, cam.name, cam.stream_url)
+    db.close()
+    
     asyncio.create_task(ai_analysis_task())
 
-# 查询列表
-@app.get("/api/config/cameras")
-async def get_cameras():
-    return list(DB_CAMERAS.values())
+# 查询列表 (对接数据库)
+@app.get("/api/config/cameras", response_model=list[CameraResponse])
+async def get_cameras(db: Session = Depends(get_db)):
+    return db.query(DBCamera).all()
 
-# 新增摄像头
-@app.post("/api/config/cameras")
-async def add_camera(cam: CameraCreate):
-    global NEXT_CAM_ID
-    cam_id = NEXT_CAM_ID
-    NEXT_CAM_ID += 1
-    DB_CAMERAS[cam_id] = {"id": cam_id, "name": cam.name, "url": cam.url}
-    # 热更新：立即启动流！
-    stream_manager.start_camera(cam_id, cam.name, cam.url)
-    return {"status": "success", "data": DB_CAMERAS[cam_id]}
+# 新增摄像头 (对接数据库)
+@app.post("/api/config/cameras", response_model=CameraResponse)
+async def add_camera(cam: CameraCreate, db: Session = Depends(get_db)):
+    db_cam = DBCamera(**cam.model_dump())
+    db.add(db_cam)
+    db.commit()
+    db.refresh(db_cam)
+    
+    # 热更新：启动推流
+    if db_cam.is_active:
+        stream_manager.start_camera(db_cam.id, db_cam.name, db_cam.stream_url)
+    return db_cam
 
-# 修改摄像头
-@app.put("/api/config/cameras/{cam_id}")
-async def update_camera(cam_id: int, cam: CameraCreate):
-    if cam_id not in DB_CAMERAS: raise HTTPException(status_code=404, detail="摄像头不存在")
-    DB_CAMERAS[cam_id]["name"] = cam.name
-    DB_CAMERAS[cam_id]["url"] = cam.url
-    # 热更新：重启该流！
-    stream_manager.start_camera(cam_id, cam.name, cam.url)
-    return {"status": "success"}
-
-# 删除摄像头
+# 删除摄像头 (对接数据库)
 @app.delete("/api/config/cameras/{cam_id}")
-async def delete_camera(cam_id: int):
-    if cam_id not in DB_CAMERAS: raise HTTPException(status_code=404, detail="摄像头不存在")
-    del DB_CAMERAS[cam_id]
-    # 热更新：立即关闭底层的 cv2 线程！
+async def delete_camera(cam_id: int, db: Session = Depends(get_db)):
+    db_cam = db.query(DBCamera).filter(DBCamera.id == cam_id).first()
+    if not db_cam: raise HTTPException(status_code=404, detail="摄像头不存在")
+    
+    db.delete(db_cam)
+    db.commit()
+    
+    # 热更新：停止推流
     stream_manager.stop_camera(cam_id)
     return {"status": "success"}
 
-# 视频推流接口 (现在使用 ID 查找)
+# 视频推流接口 (保持不变)
 @app.get("/api/video_feed/{cam_id}")
 async def video_feed(cam_id: int):
     def generate():

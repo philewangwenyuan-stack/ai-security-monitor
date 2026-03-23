@@ -13,9 +13,10 @@ const alerts = ref<any[]>([])
 const latestAlert = computed(() => alerts.value.length > 0 ? alerts.value[0] : null)
 
 // 当前选中摄像头的流地址 (主画面展示)
+// 当前选中摄像头的流地址 (主画面展示)
 const selectedCameraStreamUrl = computed(() => {
   const selected = cameras.value.find(c => c.id === selectedCameraId.value)
-  return selected ? `http://127.0.0.1:8000/api/video_feed/${selected.name}` : null
+  return selected ? `http://127.0.0.1:8000/api/video_feed/${selected.id}` : null
 })
 
 let ws: WebSocket | null = null;

@@ -9,7 +9,8 @@ const loading = ref(false)
 // 弹窗状态
 const isModalOpen = ref(false)
 const modalMode = ref<'add' | 'edit'>('add')
-const currentCamera = ref({ id: 0, name: '', url: '' })
+// 包含了数据库中真实的字段：stream_url 和 capture_interval
+const currentCamera = ref({ id: 0, name: '', stream_url: '', capture_interval: 5 })
 
 // 1. 获取摄像头列表
 const fetchCameras = async () => {
@@ -33,14 +34,15 @@ const openModal = (mode: 'add' | 'edit', cam?: any) => {
   if (mode === 'edit' && cam) {
     currentCamera.value = { ...cam }
   } else {
-    currentCamera.value = { id: 0, name: '', url: '' }
+    // 默认给 5 秒的抽帧间隔
+    currentCamera.value = { id: 0, name: '', stream_url: '', capture_interval: 5 }
   }
   isModalOpen.value = true
 }
 
 // 3. 提交表单 (对接后端 POST/PUT)
 const saveCamera = async () => {
-  if (!currentCamera.value.name || !currentCamera.value.url) {
+  if (!currentCamera.value.name || !currentCamera.value.stream_url) {
     alert("名称和地址不能为空！")
     return
   }
@@ -56,7 +58,9 @@ const saveCamera = async () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         name: currentCamera.value.name,
-        url: currentCamera.value.url
+        stream_url: currentCamera.value.stream_url, // 对接数据库字段
+        capture_interval: Number(currentCamera.value.capture_interval), // 对接间隔字段
+        is_active: true
       })
     })
 
@@ -109,16 +113,18 @@ const deleteCamera = async (id: number) => {
                 <th class="px-6 py-4">ID</th>
                 <th class="px-6 py-4">监控点名称</th>
                 <th class="px-6 py-4">RTSP / 视频流地址</th>
+                <th class="px-6 py-4">AI 分析间隔</th>
                 <th class="px-6 py-4 text-right">操作</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-[#374151] bg-[#1F2937]">
-              <tr v-if="loading"><td colspan="4" class="text-center py-8">加载中...</td></tr>
-              <tr v-else-if="cameras.length === 0"><td colspan="4" class="text-center py-8">暂无配置摄像头</td></tr>
+              <tr v-if="loading"><td colspan="5" class="text-center py-8">加载中...</td></tr>
+              <tr v-else-if="cameras.length === 0"><td colspan="5" class="text-center py-8">暂无配置摄像头</td></tr>
               <tr v-for="cam in cameras" :key="cam.id" class="hover:bg-[#374151]/30 transition-colors">
                 <td class="px-6 py-4 font-mono">{{ cam.id }}</td>
                 <td class="px-6 py-4 font-bold text-gray-200">{{ cam.name }}</td>
-                <td class="px-6 py-4 font-mono text-xs text-blue-400 break-all">{{ cam.url }}</td>
+                <td class="px-6 py-4 font-mono text-xs text-blue-400 break-all">{{ cam.stream_url }}</td>
+                <td class="px-6 py-4 font-mono text-xs text-gray-400">{{ cam.capture_interval }} 秒/次</td>
                 <td class="px-6 py-4 text-right space-x-3">
                   <button @click="openModal('edit', cam)" class="text-blue-400 hover:text-blue-300 font-medium">编辑</button>
                   <button @click="deleteCamera(cam.id)" class="text-red-400 hover:text-red-300 font-medium">删除</button>
@@ -143,7 +149,11 @@ const deleteCamera = async (id: number) => {
           </div>
           <div>
             <label class="block text-sm font-medium text-gray-400 mb-1">视频流/RTSP地址</label>
-            <input v-model="currentCamera.url" type="text" placeholder="rtsp://..." class="w-full bg-[#111827] border border-[#374151] rounded px-3 py-2 text-white focus:outline-none focus:border-[#60A5FA]" />
+            <input v-model="currentCamera.stream_url" type="text" placeholder="rtsp://..." class="w-full bg-[#111827] border border-[#374151] rounded px-3 py-2 text-white focus:outline-none focus:border-[#60A5FA]" />
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-400 mb-1">AI 抽帧分析间隔 (秒)</label>
+            <input v-model="currentCamera.capture_interval" type="number" min="1" class="w-full bg-[#111827] border border-[#374151] rounded px-3 py-2 text-white focus:outline-none focus:border-[#60A5FA]" />
           </div>
         </div>
         <div class="px-6 py-4 border-t border-[#374151] flex justify-end gap-3 bg-[#111827]">
