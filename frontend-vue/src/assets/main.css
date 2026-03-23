@@ -1,35 +1,15 @@
-@import './base.css';
+@import "tailwindcss";
 
+/* 保证整个页面是严格色号的暗色背景且撑满全屏 */
+html,
+body,
 #app {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
-  font-weight: normal;
-}
-
-a,
-.green {
-  text-decoration: none;
-  color: hsla(160, 100%, 37%, 1);
-  transition: 0.4s;
-  padding: 3px;
-}
-
-@media (hover: hover) {
-  a:hover {
-    background-color: hsla(160, 100%, 37%, 0.2);
-  }
-}
-
-@media (min-width: 1024px) {
-  body {
-    display: flex;
-    place-items: center;
-  }
-
-  #app {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    padding: 0 2rem;
-  }
+  height: 100%;
+  margin: 0;
+  background-color: #111827;
+  /* 严格按照色号配置 */
+  color: #E5E7EB;
+  /* 文字使用 gray-200，保证可读性 */
+  font-family: Inter, system-ui, sans-serif;
+  /* 使用更具科技感的字体 */
 }
