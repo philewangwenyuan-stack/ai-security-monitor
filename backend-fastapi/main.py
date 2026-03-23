@@ -1,4 +1,4 @@
-#uvicorn main:app --reload
+#uvicorn main:app --reload --host 0.0.0.0 --port 8000
 from sqlalchemy.orm import Session
 from fastapi import Depends
 from app.core.database import get_db
@@ -16,14 +16,25 @@ from datetime import datetime
 import cv2
 import threading
 import time
-
-# 引入你的原有模块 (如果不用数据库可暂时注释前两行)
+import os
+from fastapi.staticfiles import StaticFiles
+from app.models.alert import Alert
 from app.api.router import api_router
 from app.core.database import engine, Base
 from app.services.llm_client import SecurityVLMClient
 
 Base.metadata.create_all(bind=engine)
 app = FastAPI(title="AI Security Monitor API")
+
+# ==========================================
+# 【新增】本地硬盘存储目录配置
+# ==========================================
+UPLOAD_DIR = "static/alerts"
+# 如果文件夹不存在，系统会自动在 backend-fastapi 目录下创建它
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+# 挂载静态目录：前端如果访问 http://.../static/alerts/xxx.jpg，就会直接读取本地硬盘的这个文件夹
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 app.add_middleware(
     CORSMiddleware,
@@ -91,13 +102,30 @@ stream_manager = StreamManager()
 # 2. WebSocket 与 AI 后台分析
 # ==========================================
 class ConnectionManager:
-    def __init__(self): self.active_connections = []
-    async def connect(self, ws: WebSocket): await ws.accept(); self.active_connections.append(ws)
-    def disconnect(self, ws: WebSocket): self.active_connections.remove(ws) if ws in self.active_connections else None
+    def __init__(self): 
+        self.active_connections = []
+        
+    async def connect(self, ws: WebSocket): 
+        await ws.accept()
+        self.active_connections.append(ws)
+        print(f"🔗 [WebSocket] 新前端已连接！当前总连接数: {len(self.active_connections)}")
+        
+    def disconnect(self, ws: WebSocket): 
+        if ws in self.active_connections:
+            self.active_connections.remove(ws)
+            print(f"❌ [WebSocket] 前端已断开！当前总连接数: {len(self.active_connections)}")
+            
     async def broadcast(self, msg: str):
+        if not self.active_connections:
+            print("⚠️ [WebSocket] 当前没有任何前端连接，告警消息被丢弃！(请刷新浏览器页面)")
+            return
+            
         for ws in self.active_connections:
-            try: await ws.send_text(msg)
-            except: pass
+            try: 
+                await ws.send_text(msg)
+            except Exception as e: 
+                # 之前这里是 pass，导致报错了你也看不见
+                print(f"🔥 [WebSocket] 消息发送失败: {e}")
 
 manager = ConnectionManager()
 
@@ -108,39 +136,112 @@ async def websocket_endpoint(websocket: WebSocket):
         while True: await websocket.receive_text()
     except WebSocketDisconnect: manager.disconnect(websocket)
 
+
+# 【新增】将单次大模型调用抽离成一个独立的异步函数
+async def process_single_frame(cam_name: str, frame_bytes: bytes):
+    """处理单个摄像头单帧图像的独立任务，不阻塞主循环"""
+    loop = asyncio.get_event_loop()
+    try:
+        # 1. 调用大模型
+        result = await loop.run_in_executor(None, llm_client.analyze_frame, frame_bytes, cam_name)
+        
+        if result and result.get("has_issue"):
+            print(f"🚨 [{cam_name}] 检测到异常，正在保存图片并写入数据库...")
+            
+            # ========================================
+            # 【核心1】将图片字节流直接写入本地硬盘
+            # ========================================
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            unique_id = str(uuid.uuid4())[:6]
+            # 生成文件名，例如: 副塔楼作业面监控_20260323_165600_a1b2c3.jpg
+            img_filename = f"{cam_name}_{timestamp}_{unique_id}.jpg"
+            img_filepath = os.path.join(UPLOAD_DIR, img_filename)
+            
+            # 以二进制写入模式(wb)保存到本地
+            with open(img_filepath, "wb") as f:
+                f.write(frame_bytes)
+                
+            # 供数据库和前端读取的相对路径 URL
+            saved_image_url = f"/static/alerts/{img_filename}"
+
+            # ========================================
+            # 【核心2】将告警数据存入 MySQL 数据库
+            # ========================================
+            db = next(get_db())
+            try:
+                for issue in result.get("alerts", []):
+                    # 把字典格式的坐标转成 JSON 字符串存入数据库
+                    boxes_json = json.dumps([issue.get("box")] if issue.get("box") else [])
+                    
+                    new_alert = Alert(
+                        camera_name=cam_name,
+                        issue_type=issue.get("issue_type", "安全隐患"),
+                        issue_description=issue.get("issue_description", ""),
+                        image_url=saved_image_url,
+                        boxes=boxes_json
+                    )
+                    db.add(new_alert)
+                db.commit() # 提交到数据库
+                print(f"💾 [{cam_name}] 数据已成功持久化到 MySQL！")
+            except Exception as db_err:
+                db.rollback()
+                print(f"❌ 数据库写入失败: {db_err}")
+            finally:
+                db.close()
+
+            # ========================================
+            # 【核心3】仍然通过 WebSocket 实时推送给前端
+            # ========================================
+            base64_img = f"data:image/jpeg;base64,{base64.b64encode(frame_bytes).decode('utf-8')}"
+            for issue in result.get("alerts", []):
+                msg = json.dumps({
+                    "type": "alert",
+                    "alert": {
+                        "id": str(uuid.uuid4())[:8], 
+                        "time": datetime.now().strftime("%H:%M:%S"),
+                        "camera": cam_name, 
+                        "type": issue.get("issue_type", "安全隐患"),
+                        "desc": issue.get("issue_description", ""), 
+                        "img": base64_img, # 实时推送仍然用 base64 最快，历史查询用 URL
+                        "boxes": [issue.get("box")] if issue.get("box") else []
+                    }
+                })
+                await manager.broadcast(msg)
+
+    except Exception as e: 
+        print(f"❌ [{cam_name}] 任务执行错误: {e}")
+
+
+# 【修改】重写后台定时任务逻辑
 async def ai_analysis_task():
     """后台任务：根据每个摄像头的抽帧时间独立进行分析"""
+    last_analysis_time = {}  # 记录每个摄像头【上一次发起分析】的时间戳
+    
     while True:
         await asyncio.sleep(1) # 每秒醒来一次，检查谁该抽帧了
         
-        # 为了不频繁查库，我们可以每次通过独立的 Session 查询配置
         db = next(get_db())
         cameras = db.query(DBCamera).filter(DBCamera.is_active == True).all()
-        current_time = int(time.time())
+        current_time = time.time() # 使用带小数的时间戳更精准
         
         for cam in cameras:
-            # 只有当当前时间是 capture_interval 的整数倍时才执行抽帧
-            if current_time % cam.capture_interval == 0:
+            # 初始化该摄像头的最后分析时间
+            if cam.id not in last_analysis_time:
+                last_analysis_time[cam.id] = 0
+                
+            # 【核心修复1】使用时间差计算，不再使用取模，完美解决时间跳过导致漏帧的问题
+            if current_time - last_analysis_time[cam.id] >= cam.capture_interval:
                 frame_bytes = stream_manager.frames.get(cam.id)
                 if not frame_bytes: 
                     continue
                 
-                loop = asyncio.get_event_loop()
-                try:
-                    result = await loop.run_in_executor(None, llm_client.analyze_frame, frame_bytes, cam.name)
-                    if result and result.get("has_issue"):
-                        base64_img = f"data:image/jpeg;base64,{base64.b64encode(frame_bytes).decode('utf-8')}"
-                        for issue in result.get("alerts", []):
-                            await manager.broadcast(json.dumps({
-                                "type": "alert",
-                                "alert": {
-                                    "id": str(uuid.uuid4())[:8], "time": datetime.now().strftime("%H:%M:%S"),
-                                    "camera": cam.name, "type": issue.get("issue_type", "安全隐患"),
-                                    "desc": issue.get("issue_description", ""), "img": base64_img
-                                }
-                            }))
-                except Exception as e: 
-                    print(f"[{cam.name}] 分析错误: {e}")
+                # 更新最后分析时间 (准备进入下一个周期)
+                last_analysis_time[cam.id] = current_time
+                
+                # 【核心修复2】使用 create_task 甩到后台执行！
+                # 主循环不会在这里等待大模型返回，而是立刻去检查下一个摄像头
+                asyncio.create_task(process_single_frame(cam.name, frame_bytes))
+                
         db.close()
 
 
@@ -154,6 +255,17 @@ async def startup_event():
     db.close()
     
     asyncio.create_task(ai_analysis_task())
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    print("🛑 收到退出信号，正在强制清理后台任务和视频流...")
+    
+    # 将所有正在运行的摄像头标志位设为 False，打断 cv2 的死循环
+    cam_ids = list(stream_manager.running.keys())
+    for cam_id in cam_ids:
+        stream_manager.stop_camera(cam_id)
+        
+    print("✅ 视频流释放指令已发送，准备退出。")
 
 # 查询列表 (对接数据库)
 @app.get("/api/config/cameras", response_model=list[CameraResponse])

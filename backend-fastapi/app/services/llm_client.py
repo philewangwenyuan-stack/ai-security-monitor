@@ -9,7 +9,8 @@ class SecurityVLMClient:
         # 初始化兼容 OpenAI 的客户端
         self.client = OpenAI(
             api_key=settings.LLM_API_KEY, 
-            base_url=settings.LLM_BASE_URL
+            base_url=settings.LLM_BASE_URL, 
+            timeout=15.0
         )
         self.model_name = settings.LLM_MODEL_NAME
             

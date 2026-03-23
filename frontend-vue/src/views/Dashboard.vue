@@ -22,28 +22,57 @@ const selectedCameraStreamUrl = computed(() => {
 let ws: WebSocket | null = null;
 
 onMounted(async () => {
-  // 1. 获取摄像头列表 (接入4个以上测试流)
+  // 定义后端基础地址，动态获取当前 IP，避免跨域报错
+  const backendBaseUrl = `http://${window.location.hostname}:8000`
+
+  // 1. 获取摄像头列表
   try {
-    const response = await fetch('http://127.0.0.1:8000/api/config/cameras')
+    const response = await fetch(`${backendBaseUrl}/api/config/cameras`)
     const data = await response.json()
     cameras.value = data
     if (cameras.value.length > 0) {
-      selectedCameraId.value = cameras.value[0].id // 默认选中第一个在大画面
+      selectedCameraId.value = cameras.value[0].id 
     }
-    logs.value.push(`[${new Date().toLocaleTimeString()}] 成功加载 ${cameras.value.length} 路视频源`)
+    logs.value.push(`[${new Date().toLocaleTimeString()}] ✅ 成功加载 ${cameras.value.length} 路视频源`)
   } catch (error) {
-    console.error('Failed to fetch cameras:', error)
     logs.value.push(`[${new Date().toLocaleTimeString()}] ❌ 获取视频源失败`)
   }
 
-  // 2. 连接 WebSocket (大模型告警)
-  ws = new WebSocket('ws://127.0.0.1:8000/ws/alerts')
+  // 👇 【新增】：2. 加载历史告警记录
+  try {
+    const historyRes = await fetch(`${backendBaseUrl}/api/alerts/history?limit=20`) // 默认拉取最近20条
+    const historyData = await historyRes.json()
+    
+    // 将数据存入 alerts 列表。注意要将 /static/... 拼接为完整 HTTP 路径
+    alerts.value = historyData.map((item: any) => ({
+      ...item,
+      img: item.img.startsWith('http') ? item.img : `${backendBaseUrl}${item.img}`
+    }))
+    
+    if (historyData.length > 0) {
+      logs.value.push(`[${new Date().toLocaleTimeString()}] 💾 成功从数据库加载 ${historyData.length} 条历史抓拍记录`)
+    }
+  } catch (error) {
+    console.error('获取历史记录失败:', error)
+    logs.value.push(`[${new Date().toLocaleTimeString()}] ⚠️ 历史记录加载失败`)
+  }
+
+  // 3. 连接 WebSocket (大模型实时告警)
+  const wsUrl = `ws://${window.location.hostname}:8000/ws/alerts`
+  ws = new WebSocket(wsUrl)
+  
+  ws.onopen = () => logs.value.push(`[${new Date().toLocaleTimeString()}] 🔗 成功连接 AI 实时告警通道`)
+  ws.onclose = () => logs.value.push(`[${new Date().toLocaleTimeString()}] ❌ AI 告警通道已断开`)
+  ws.onerror = (error) => logs.value.push(`[${new Date().toLocaleTimeString()}] ⚠️ 告警通道发生网络错误`)
+
   ws.onmessage = (event) => {
     const data = JSON.parse(event.data)
     if (data.type === 'info') {
       logs.value.push(`[${new Date().toLocaleTimeString()}] ${data.message}`)
     } else if (data.type === 'alert') {
-      logs.value.push(`[${new Date().toLocaleTimeString()}] 收到新告警: ${data.alert.type}`)
+      logs.value.push(`[${new Date().toLocaleTimeString()}] 🚨 收到新告警: ${data.alert.type}`)
+      
+      // 收到实时告警时，也要判断一下图片路径（实时发来的可能还是 base64，历史的是 url）
       alerts.value.unshift(data.alert)
     }
   }
