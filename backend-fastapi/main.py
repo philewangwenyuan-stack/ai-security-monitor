@@ -22,13 +22,13 @@ from app.models.alert import Alert
 from app.api.router import api_router
 from app.core.database import engine, Base
 from app.services.llm_client import SecurityVLMClient
+from sqlalchemy import desc
+from app.models.alert import Alert
+from sqlalchemy import desc
 
 Base.metadata.create_all(bind=engine)
 app = FastAPI(title="AI Security Monitor API")
 
-# ==========================================
-# 【新增】本地硬盘存储目录配置
-# ==========================================
 UPLOAD_DIR = "static/alerts"
 # 如果文件夹不存在，系统会自动在 backend-fastapi 目录下创建它
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -177,6 +177,7 @@ async def process_single_frame(cam_name: str, frame_bytes: bytes):
                         camera_name=cam_name,
                         issue_type=issue.get("issue_type", "安全隐患"),
                         issue_description=issue.get("issue_description", ""),
+                        scene_description=scene_desc,
                         image_url=saved_image_url,
                         boxes=boxes_json
                     )
@@ -298,6 +299,34 @@ async def delete_camera(cam_id: int, db: Session = Depends(get_db)):
     stream_manager.stop_camera(cam_id)
     return {"status": "success"}
 
+#历史数据查询接口
+@app.get("/api/alerts/history")
+async def get_alerts_history(limit: int = 50, db: Session = Depends(get_db)):
+    """获取历史告警记录给前端大屏展示"""
+    # 查询最近的 limit 条记录，按时间倒序排列 (最新的在最前面)
+    records = db.query(Alert).order_by(desc(Alert.created_at)).limit(limit).all()
+    
+    result = []
+    for record in records:
+        try:
+            # 尝试将数据库里存的 JSON 字符串转回数组
+            boxes_data = json.loads(record.boxes) if record.boxes else []
+        except:
+            boxes_data = []
+            
+        result.append({
+            "id": record.id,
+            "time": record.created_at.strftime("%H:%M:%S"),
+            "date": record.created_at.strftime("%Y-%m-%d"),
+            "camera": record.camera_name,
+            "type": record.issue_type,
+            "desc": record.issue_description,
+            # 图片路径是 /static/...，前端拿着这个路径加上域名就能访问图片
+            "img": record.image_url, 
+            "boxes": boxes_data
+        })
+    return result
+
 # 视频推流接口 (保持不变)
 @app.get("/api/video_feed/{cam_id}")
 async def video_feed(cam_id: int):
@@ -310,3 +339,43 @@ async def video_feed(cam_id: int):
                 yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
             time.sleep(0.04)
     return StreamingResponse(generate(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+#详情弹窗
+@app.get("/api/alerts/history")
+async def get_alert_history(limit: int = 50, db: Session = Depends(get_db)):
+    """
+    获取历史告警记录给前端大屏和详情页展示
+    """
+    try:
+        # 按 ID 倒序查询最新的告警记录
+        alerts = db.query(Alert).order_by(desc(Alert.id)).limit(limit).all()
+        
+        result = []
+        for a in alerts:
+            # 1. 尝试解析数据库中存储的 JSON 格式 bbox 坐标框
+            try:
+                parsed_boxes = json.loads(a.boxes) if a.boxes else []
+            except Exception:
+                parsed_boxes = []
+                
+            # 2. 尝试提取时间（适配你 models/alert.py 里的字段名）
+            # 假设你的 Alert 模型有 created_at 字段，如果没有则做个兜底
+            time_str = "未知时间"
+            if hasattr(a, "created_at") and a.created_at:
+                time_str = a.created_at.strftime("%H:%M:%S")
+                
+            # 3. 组装成前端 Vue 需要的字段格式
+            result.append({
+                "id": a.id,
+                "time": time_str,
+                "camera": a.camera_name,
+                "type": a.issue_type,
+                "desc": a.issue_description,
+                "img": a.image_url,
+                "boxes": parsed_boxes
+            })
+            
+        return result
+    except Exception as e:
+        print(f"❌ 获取历史告警失败: {e}")
+        raise HTTPException(status_code=500, detail="获取历史告警失败")

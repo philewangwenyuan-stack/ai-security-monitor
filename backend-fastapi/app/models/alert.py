@@ -10,6 +10,7 @@ class Alert(Base):
     camera_name = Column(String(50), index=True, comment="摄像头名称")
     issue_type = Column(String(50), index=True, comment="隐患类型")
     issue_description = Column(Text, comment="详细描述")
+    scene_description = Column(Text, comment="画面客观描述(AI思维链)")
     image_url = Column(String(255), comment="本地静态图片访问路径")
     boxes = Column(Text, comment="检测框坐标(JSON格式字符串)")
     created_at = Column(DateTime, default=datetime.now, comment="告警时间")

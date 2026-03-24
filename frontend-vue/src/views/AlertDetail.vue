@@ -1,21 +1,47 @@
 <script setup lang="ts">
+import { ref, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import BboxImage from '../components/BboxImage.vue'
 
 const router = useRouter()
 const route = useRoute()
 
-// 实际开发中，这里会根据 route.params.id 向后端发起请求获取详情
-// 这里先用写死的数据展示结构
-const alertData = {
+// 1. 将静态对象改为 ref 响应式对象
+const alertData = ref<any>({
   id: route.params.id,
-  time: '17:31:14',
-  camera: 'Cam-02 生产车间A区',
-  type: '未戴安全帽',
-  desc: '系统检测到画面左侧有一名工人未佩戴标准安全帽，已记录违规并上报数据库。',
-  img: 'https://images.unsplash.com/photo-1504328345606-18bbc8c9d7d1?q=80&w=800&auto=format&fit=crop', 
-  boxes: [{ x: 45, y: 20, w: 15, h: 20 }] 
-}
+  time: '',
+  camera: '',
+  type: '正在加载...',
+  desc: '',
+  img: '', 
+  boxes: [] 
+})
+
+onMounted(async () => {
+  const backendBaseUrl = `http://${window.location.hostname}:8000`
+  try {
+    // 2. 从后端获取对应 ID 的真实数据
+    // 这里采用拉取历史记录过滤的方式，如果后端有写单条查询接口 (如 /api/alerts/{id}) 更好
+    const historyRes = await fetch(`${backendBaseUrl}/api/alerts/history?limit=50`) 
+    const historyData = await historyRes.json()
+    
+    // 寻找匹配当前路由 ID 的告警记录
+    const currentAlert = historyData.find((item: any) => String(item.id) === String(route.params.id))
+    
+    if (currentAlert) {
+      alertData.value = {
+        ...currentAlert,
+        // 确保图片路径是完整的
+        img: currentAlert.img.startsWith('http') ? currentAlert.img : `${backendBaseUrl}${currentAlert.img}`
+      }
+    } else {
+      alertData.value.desc = '未找到该告警记录信息或已被清理'
+    }
+  } catch (error) {
+    console.error('获取告警详情失败:', error)
+    alertData.value.desc = '数据获取失败，请检查网络连接'
+  }
+})
 </script>
 
 <template>
@@ -25,7 +51,7 @@ const alertData = {
         <span>← 返回监控大屏</span>
       </button>
 
-      <div class="bg-[#1F2937] border border-[#374151] rounded-xl shadow-2xl p-6 flex flex-col gap-6">
+      <div v-if="alertData.img" class="bg-[#1F2937] border border-[#374151] rounded-xl shadow-2xl p-6 flex flex-col gap-6">
         <div class="flex justify-between items-center border-b border-[#374151] pb-4">
           <div>
             <h1 class="text-3xl font-bold text-[#EF4444] mb-2">{{ alertData.type }}</h1>
@@ -35,7 +61,7 @@ const alertData = {
         </div>
 
         <div class="w-full max-w-3xl mx-auto">
-          <BboxImage :image-url="alertData.img" :label="alertData.type" :boxes="alertData.boxes" />
+          <BboxImage :image-url="alertData.img" :label="alertData.type" :boxes="alertData.boxes || []" />
         </div>
 
         <div class="bg-[#111827] p-4 rounded-lg border border-[#374151]">
@@ -43,6 +69,11 @@ const alertData = {
           <p class="text-gray-300 leading-relaxed">{{ alertData.desc }}</p>
         </div>
       </div>
+      
+      <div v-else class="text-center text-gray-400 py-32 bg-[#1F2937] rounded-xl border border-[#374151]">
+         {{ alertData.desc || '正在加载现场抓拍画面...' }}
+      </div>
+      
     </div>
   </div>
 </template>
