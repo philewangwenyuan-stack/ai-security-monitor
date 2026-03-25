@@ -1,4 +1,5 @@
 #uvicorn main:app --reload --host 0.0.0.0 --port 8000
+#.venv\Scripts\activate.bat
 from sqlalchemy.orm import Session
 from fastapi import Depends
 from app.core.database import get_db
@@ -17,6 +18,12 @@ import cv2
 import threading
 import time
 import os
+
+import io
+from minio import Minio
+from minio.error import S3Error
+from app.core.config import settings # 引入配置文件
+
 from fastapi.staticfiles import StaticFiles
 from app.models.alert import Alert
 from app.api.router import api_router
@@ -26,6 +33,43 @@ from sqlalchemy import desc
 from app.models.alert import Alert
 from sqlalchemy import desc
 
+# ==========================================
+# ☁️ MinIO 客户端初始化 (使用 settings)
+# ==========================================
+minio_client = Minio(
+    settings.MINIO_ENDPOINT,
+    access_key=settings.MINIO_ACCESS_KEY,
+    secret_key=settings.MINIO_SECRET_KEY,
+    secure=settings.MINIO_SECURE 
+)
+
+def init_minio():
+    """初始化确保存储桶存在，并设置为公开可读访问"""
+    try:
+        # 全部替换为 settings.MINIO_BUCKET_NAME
+        if not minio_client.bucket_exists(settings.MINIO_BUCKET_NAME):
+            minio_client.make_bucket(settings.MINIO_BUCKET_NAME)
+            print(f"✅ 成功创建 MinIO 存储桶: {settings.MINIO_BUCKET_NAME}")
+            
+            policy = {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Principal": {"AWS": ["*"]},
+                        "Action": ["s3:GetObject"],
+                        "Resource": [f"arn:aws:s3:::{settings.MINIO_BUCKET_NAME}/*"]
+                    }
+                ]
+            }
+            minio_client.set_bucket_policy(settings.MINIO_BUCKET_NAME, json.dumps(policy))
+            print(f"✅ 已将存储桶 {settings.MINIO_BUCKET_NAME} 设置为公开只读权限")
+        else:
+            print(f"✅ MinIO 存储桶 {settings.MINIO_BUCKET_NAME} 已准备就绪")
+    except Exception as e:
+        print(f"❌ MinIO 初始化失败: {e}")
+
+#===========================================
 Base.metadata.create_all(bind=engine)
 app = FastAPI(title="AI Security Monitor API")
 
@@ -141,7 +185,7 @@ async def websocket_endpoint(websocket: WebSocket):
 async def process_single_frame(cam_name: str, frame_bytes: bytes):
     """处理单个摄像头单帧图像的独立任务，不阻塞主循环"""
     loop = asyncio.get_event_loop()
-    try:
+    try: # <=== 这里是外层的 try 开始
         # 1. 调用大模型
         result = await loop.run_in_executor(None, llm_client.analyze_frame, frame_bytes, cam_name)
         
@@ -149,69 +193,92 @@ async def process_single_frame(cam_name: str, frame_bytes: bytes):
             print(f"🚨 [{cam_name}] 检测到异常，正在保存图片并写入数据库...")
             
             # ========================================
-            # 【核心1】将图片字节流直接写入本地硬盘
+            # 【核心1】将图片字节流直接上传到 MinIO
             # ========================================
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             unique_id = str(uuid.uuid4())[:6]
-            # 生成文件名，例如: 副塔楼作业面监控_20260323_165600_a1b2c3.jpg
             img_filename = f"{cam_name}_{timestamp}_{unique_id}.jpg"
-            img_filepath = os.path.join(UPLOAD_DIR, img_filename)
             
-            # 以二进制写入模式(wb)保存到本地
-            with open(img_filepath, "wb") as f:
-                f.write(frame_bytes)
+            try:
+                # 需确保文件顶部已导入 io (import io)
+                img_data = io.BytesIO(frame_bytes)
+                length = len(frame_bytes)
                 
-            # 供数据库和前端读取的相对路径 URL
-            saved_image_url = f"/static/alerts/{img_filename}"
+                # 使用 settings.MINIO_BUCKET_NAME
+                minio_client.put_object(
+                    settings.MINIO_BUCKET_NAME,
+                    img_filename,
+                    img_data,
+                    length,
+                    content_type="image/jpeg" 
+                )
+                
+                # 拼接出前端可以直接访问的绝对路径 URL
+                saved_image_url = f"http://{settings.MINIO_ENDPOINT}/{settings.MINIO_BUCKET_NAME}/{img_filename}"
+                print(f"☁️ 图片已成功上传至 MinIO: {saved_image_url}")
+                
+            except Exception as e:
+                print(f"❌ MinIO 图片上传失败: {e}")
+                saved_image_url = "" 
 
             # ========================================
             # 【核心2】将告警数据存入 MySQL 数据库
             # ========================================
             db = next(get_db())
-            try:
+            saved_alerts = [] # 用来暂存刚写入数据库的告警对象
+            
+            try: # <=== 这里是内层的 try 开始 (处理数据库)
                 for issue in result.get("alerts", []):
-                    # 把字典格式的坐标转成 JSON 字符串存入数据库
                     boxes_json = json.dumps([issue.get("box")] if issue.get("box") else [])
                     
                     new_alert = Alert(
                         camera_name=cam_name,
                         issue_type=issue.get("issue_type", "安全隐患"),
                         issue_description=issue.get("issue_description", ""),
-                        scene_description=scene_desc,
-                        image_url=saved_image_url,
+                        scene_desc=result.get("scene_description", "画面暂无描述"), 
+                        image_url=saved_image_url, # 这里使用的是 MinIO 生成的 URL
                         boxes=boxes_json
                     )
                     db.add(new_alert)
+                    saved_alerts.append(new_alert) 
+                    
                 db.commit() # 提交到数据库
+                
+                # 刷新对象，让 SQLAlchemy 从数据库拿回它们真正的自增 ID
+                for alert_obj in saved_alerts:
+                    db.refresh(alert_obj)
+                    
                 print(f"💾 [{cam_name}] 数据已成功持久化到 MySQL！")
-            except Exception as db_err:
+
+                # ========================================
+                # 【核心3】通过 WebSocket 实时推送给前端
+                # ========================================
+                base64_img = f"data:image/jpeg;base64,{base64.b64encode(frame_bytes).decode('utf-8')}"
+                
+                # 遍历拿到真实 ID 的数据库对象，推给前端
+                for db_alert, issue in zip(saved_alerts, result.get("alerts", [])):
+                    msg = json.dumps({
+                        "type": "alert",
+                        "alert": {
+                            "id": db_alert.id, # 使用真实的数据库ID
+                            "time": datetime.now().strftime("%H:%M:%S"),
+                            "camera": cam_name, 
+                            "type": issue.get("issue_type", "安全隐患"),
+                            "desc": issue.get("issue_description", ""), 
+                            "img": base64_img, 
+                            "boxes": [issue.get("box")] if issue.get("box") else []
+                        }
+                    })
+                    await manager.broadcast(msg)
+
+            except Exception as db_err: # <=== 这是内层 try 对应的 except
                 db.rollback()
                 print(f"❌ 数据库写入失败: {db_err}")
-            finally:
+            finally: # <=== 这是内层 try 对应的 finally
                 db.close()
 
-            # ========================================
-            # 【核心3】仍然通过 WebSocket 实时推送给前端
-            # ========================================
-            base64_img = f"data:image/jpeg;base64,{base64.b64encode(frame_bytes).decode('utf-8')}"
-            for issue in result.get("alerts", []):
-                msg = json.dumps({
-                    "type": "alert",
-                    "alert": {
-                        "id": str(uuid.uuid4())[:8], 
-                        "time": datetime.now().strftime("%H:%M:%S"),
-                        "camera": cam_name, 
-                        "type": issue.get("issue_type", "安全隐患"),
-                        "desc": issue.get("issue_description", ""), 
-                        "img": base64_img, # 实时推送仍然用 base64 最快，历史查询用 URL
-                        "boxes": [issue.get("box")] if issue.get("box") else []
-                    }
-                })
-                await manager.broadcast(msg)
-
-    except Exception as e: 
+    except Exception as e: # <=== 这是外层 try 对应的 except 
         print(f"❌ [{cam_name}] 任务执行错误: {e}")
-
 
 # 【修改】重写后台定时任务逻辑
 async def ai_analysis_task():
@@ -299,33 +366,27 @@ async def delete_camera(cam_id: int, db: Session = Depends(get_db)):
     stream_manager.stop_camera(cam_id)
     return {"status": "success"}
 
-#历史数据查询接口
-@app.get("/api/alerts/history")
-async def get_alerts_history(limit: int = 50, db: Session = Depends(get_db)):
-    """获取历史告警记录给前端大屏展示"""
-    # 查询最近的 limit 条记录，按时间倒序排列 (最新的在最前面)
-    records = db.query(Alert).order_by(desc(Alert.created_at)).limit(limit).all()
+# 编辑功能接口
+@app.put("/api/config/cameras/{cam_id}", response_model=CameraResponse)
+async def update_camera(cam_id: int, cam: CameraCreate, db: Session = Depends(get_db)):
+    db_cam = db.query(DBCamera).filter(DBCamera.id == cam_id).first()
+    if not db_cam: 
+        raise HTTPException(status_code=404, detail="摄像头不存在")
     
-    result = []
-    for record in records:
-        try:
-            # 尝试将数据库里存的 JSON 字符串转回数组
-            boxes_data = json.loads(record.boxes) if record.boxes else []
-        except:
-            boxes_data = []
-            
-        result.append({
-            "id": record.id,
-            "time": record.created_at.strftime("%H:%M:%S"),
-            "date": record.created_at.strftime("%Y-%m-%d"),
-            "camera": record.camera_name,
-            "type": record.issue_type,
-            "desc": record.issue_description,
-            # 图片路径是 /static/...，前端拿着这个路径加上域名就能访问图片
-            "img": record.image_url, 
-            "boxes": boxes_data
-        })
-    return result
+    # 更新数据库字段
+    update_data = cam.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(db_cam, key, value)
+        
+    db.commit()
+    db.refresh(db_cam)
+    
+    # 热更新：先停止旧的推流，再启动新的推流
+    stream_manager.stop_camera(cam_id)
+    if db_cam.is_active:
+        stream_manager.start_camera(db_cam.id, db_cam.name, db_cam.stream_url)
+        
+    return db_cam
 
 # 视频推流接口 (保持不变)
 @app.get("/api/video_feed/{cam_id}")
@@ -340,41 +401,38 @@ async def video_feed(cam_id: int):
             time.sleep(0.04)
     return StreamingResponse(generate(), media_type="multipart/x-mixed-replace; boundary=frame")
 
-#详情弹窗
+# 历史数据查询接口
 @app.get("/api/alerts/history")
-async def get_alert_history(limit: int = 50, db: Session = Depends(get_db)):
-    """
-    获取历史告警记录给前端大屏和详情页展示
-    """
+async def get_alerts_history(limit: int = 50, db: Session = Depends(get_db)):
+    """获取历史告警记录给前端大屏和详情页展示"""
     try:
         # 按 ID 倒序查询最新的告警记录
-        alerts = db.query(Alert).order_by(desc(Alert.id)).limit(limit).all()
+        records = db.query(Alert).order_by(desc(Alert.id)).limit(limit).all()
         
         result = []
-        for a in alerts:
-            # 1. 尝试解析数据库中存储的 JSON 格式 bbox 坐标框
+        for record in records:
+            # 尝试解析 JSON 坐标框
             try:
-                parsed_boxes = json.loads(a.boxes) if a.boxes else []
+                boxes_data = json.loads(record.boxes) if record.boxes else []
             except Exception:
-                parsed_boxes = []
+                boxes_data = []
                 
-            # 2. 尝试提取时间（适配你 models/alert.py 里的字段名）
-            # 假设你的 Alert 模型有 created_at 字段，如果没有则做个兜底
             time_str = "未知时间"
-            if hasattr(a, "created_at") and a.created_at:
-                time_str = a.created_at.strftime("%H:%M:%S")
+            date_str = "未知日期"
+            if hasattr(record, "created_at") and record.created_at:
+                time_str = record.created_at.strftime("%H:%M:%S")
+                date_str = record.created_at.strftime("%Y-%m-%d")
                 
-            # 3. 组装成前端 Vue 需要的字段格式
             result.append({
-                "id": a.id,
+                "id": record.id,
                 "time": time_str,
-                "camera": a.camera_name,
-                "type": a.issue_type,
-                "desc": a.issue_description,
-                "img": a.image_url,
-                "boxes": parsed_boxes
+                "date": date_str,
+                "camera": record.camera_name,
+                "type": record.issue_type,
+                "desc": record.issue_description,
+                "img": record.image_url, 
+                "boxes": boxes_data
             })
-            
         return result
     except Exception as e:
         print(f"❌ 获取历史告警失败: {e}")

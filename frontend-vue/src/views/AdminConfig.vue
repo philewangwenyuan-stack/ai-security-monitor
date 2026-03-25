@@ -85,7 +85,7 @@ const deleteCamera = async (id: number) => {
 </script>
 
 <template>
-  <div class="min-h-screen bg-[#111827] text-gray-200 p-8 font-sans">
+  <div class="min-h-screen bg-[#2B528C] text-gray-200 p-8 font-sans">
     <div class="max-w-6xl mx-auto">
       
       <header class="flex justify-between items-center mb-8 border-b border-[#374151] pb-4">
@@ -108,7 +108,7 @@ const deleteCamera = async (id: number) => {
 
         <div class="overflow-x-auto rounded-lg border border-[#374151]">
           <table class="w-full text-left text-sm text-gray-400">
-            <thead class="bg-[#111827] text-gray-300 uppercase font-semibold">
+            <thead class="bg-[#2B528C] text-gray-300 uppercase font-semibold">
               <tr>
                 <th class="px-6 py-4">ID</th>
                 <th class="px-6 py-4">监控点名称</th>
@@ -138,25 +138,25 @@ const deleteCamera = async (id: number) => {
 
     <div v-if="isModalOpen" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
       <div class="bg-[#1F2937] rounded-xl border border-[#374151] shadow-2xl w-full max-w-md overflow-hidden">
-        <div class="px-6 py-4 border-b border-[#374151] flex justify-between items-center bg-[#111827]">
+        <div class="px-6 py-4 border-b border-[#374151] flex justify-between items-center bg-[#2B528C]">
           <h3 class="text-lg font-bold text-white">{{ modalMode === 'add' ? '新增摄像头' : '编辑摄像头' }}</h3>
           <button @click="isModalOpen = false" class="text-gray-400 hover:text-white text-xl">&times;</button>
         </div>
         <div class="p-6 space-y-4">
           <div>
             <label class="block text-sm font-medium text-gray-400 mb-1">监控点位名称</label>
-            <input v-model="currentCamera.name" type="text" placeholder="例如: 南门主干道" class="w-full bg-[#111827] border border-[#374151] rounded px-3 py-2 text-white focus:outline-none focus:border-[#60A5FA]" />
+            <input v-model="currentCamera.name" type="text" placeholder="例如: 南门主干道" class="w-full bg-[#2B528C] border border-[#374151] rounded px-3 py-2 text-white focus:outline-none focus:border-[#60A5FA]" />
           </div>
           <div>
             <label class="block text-sm font-medium text-gray-400 mb-1">视频流/RTSP地址</label>
-            <input v-model="currentCamera.stream_url" type="text" placeholder="rtsp://..." class="w-full bg-[#111827] border border-[#374151] rounded px-3 py-2 text-white focus:outline-none focus:border-[#60A5FA]" />
+            <input v-model="currentCamera.stream_url" type="text" placeholder="rtsp://..." class="w-full bg-[#2B528C] border border-[#374151] rounded px-3 py-2 text-white focus:outline-none focus:border-[#60A5FA]" />
           </div>
           <div>
             <label class="block text-sm font-medium text-gray-400 mb-1">AI 抽帧分析间隔 (秒)</label>
-            <input v-model="currentCamera.capture_interval" type="number" min="1" class="w-full bg-[#111827] border border-[#374151] rounded px-3 py-2 text-white focus:outline-none focus:border-[#60A5FA]" />
+            <input v-model="currentCamera.capture_interval" type="number" min="1" class="w-full bg-[#2B528C] border border-[#374151] rounded px-3 py-2 text-white focus:outline-none focus:border-[#60A5FA]" />
           </div>
         </div>
-        <div class="px-6 py-4 border-t border-[#374151] flex justify-end gap-3 bg-[#111827]">
+        <div class="px-6 py-4 border-t border-[#374151] flex justify-end gap-3 bg-[#2B528C]">
           <button @click="isModalOpen = false" class="px-4 py-2 rounded text-sm text-gray-300 hover:bg-[#374151] transition-colors">取消</button>
           <button @click="saveCamera" class="px-4 py-2 rounded text-sm bg-blue-600 hover:bg-blue-500 text-white font-medium transition-colors">确认保存</button>
         </div>

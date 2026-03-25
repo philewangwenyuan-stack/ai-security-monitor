@@ -50,7 +50,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="min-h-screen bg-[#111827] text-gray-200 p-8 flex flex-col items-center">
+  <div class="min-h-screen bg-[#2B528C] text-gray-200 p-8 flex flex-col items-center">
     <div class="w-full max-w-5xl">
       <button @click="router.push('/')" class="mb-6 text-[#60A5FA] hover:text-white flex items-center gap-2 transition-colors">
         <span>← 返回监控大屏</span>
@@ -69,7 +69,7 @@ onMounted(async () => {
           <BboxImage :image-url="alertData.img" :label="alertData.type" :boxes="alertData.boxes || []" />
         </div>
 
-        <div class="bg-[#111827] p-4 rounded-lg border border-[#374151]">
+        <div class="bg-[#2B528C] p-4 rounded-lg border border-[#374151]">
           <h3 class="text-[#60A5FA] font-semibold mb-2">大模型智能分析描述：</h3>
           <p class="text-gray-300 leading-relaxed">{{ alertData.desc }}</p>
         </div>

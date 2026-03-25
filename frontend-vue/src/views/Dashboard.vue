@@ -111,10 +111,11 @@ const toolbarButtons = [
 </script>
 
 <template>
-  <div class="h-screen w-full flex flex-col bg-[#111827] text-gray-200 p-4 gap-4 overflow-hidden font-sans">
+  <div class="h-screen w-full flex flex-col bg-[#2B528C] text-gray-200 p-4 gap-4 overflow-hidden font-sans">
     <header class="flex justify-between items-center pb-2 border-b border-[#374151] flex-shrink-0">
       <div class="flex items-center gap-3">
-        <span class="text-3xl text-[#60A5FA]">■</span>
+        <!-- <span class="text-3xl text-[#60A5FA]">■</span> -->
+        <img :src="'/assets/cscec-logo.png'" alt="CSCEC Logo" class="w-8 h-8 object-contain" />
         <h1 class="text-2xl font-extrabold tracking-wider text-[#60A5FA]">尖兵视频安全识别系统</h1>
       </div>
       <button @click="router.push('/admin')" class="px-5 py-1.5 bg-[#3B82F6] hover:bg-[#60A5FA] text-white rounded-md border border-[#374151] transition-colors shadow-lg font-semibold text-xs">
@@ -125,7 +126,9 @@ const toolbarButtons = [
     <main class="flex-1 flex gap-4 min-h-0">
       <div class="w-[72%] flex flex-col gap-4">
         
-        <div class="h-[65%] bg-[#1F2937] rounded-xl border border-[#374151] p-4 flex flex-col shadow-xl">
+        <div class="h-[65%] rounded-xl border border-white/10 bg-[#1F2937]/40 backdrop-blur-lg p-4 flex flex-col shadow-[0_8px_32px_rgba(0,0,0,0.35)]">
+
+
           <h2 class="text-lg font-semibold mb-3 text-[#60A5FA] border-b border-[#374151] pb-2 flex justify-between">
               <span>实时视频矩阵</span>
               <span class="text-xs text-gray-400 font-normal">在线流: {{cameras.length}} 路</span>
@@ -172,13 +175,14 @@ const toolbarButtons = [
           </div>
         </div>
         <div class="h-[35%] flex gap-4">
-          <div class="w-1/2 bg-[#1F2937] rounded-xl border border-[#374151] p-4 flex flex-col font-mono text-sm shadow-xl relative">
+          <div class="w-1/2 rounded-xl border border-white/10 bg-[#1F2937]/40 backdrop-blur-lg p-4 flex flex-col font-mono text-sm shadow-[0_8px_32px_rgba(0,0,0,0.35)] relative">
+
             <h2 class="text-gray-400 mb-3 font-sans font-semibold">系统控制台</h2>
             <div class="flex-1 bg-black/40 rounded-lg p-3 overflow-y-auto space-y-1 text-[#60A5FA]/90 flex flex-col-reverse">
               <div><div v-for="(log, i) in logs" :key="i">> {{ log }}</div></div>
             </div>
           </div>
-          <div class="w-1/2 bg-[#1F2937] rounded-xl border border-[#374151] p-4 flex flex-col shadow-xl relative">
+          <div class="flex-1 rounded-xl border border-white/10 bg-[#1F2937]/40 backdrop-blur-lg p-4 flex flex-col shadow-[0_8px_32px_rgba(0,0,0,0.35)] relative">          
             <h2 class="text-[#EF4444] mb-3 font-sans font-semibold flex items-center gap-2">
               <span class="w-2 h-2 rounded-full bg-[#EF4444] animate-pulse"></span>当前最新 AI 识别画面
             </h2>
@@ -191,12 +195,13 @@ const toolbarButtons = [
         </div>
       </div>
 
-      <div class="w-[28%] bg-[#1F2937] rounded-xl border border-[#374151] p-4 flex flex-col shadow-2xl">
+      <div class="w-[28%] bg-[#1F2937]/40 backdrop-blur-lg rounded-xl border border-white/10 p-4 flex flex-col shadow-2xl">
+        
         <h2 class="text-lg font-semibold mb-4 text-[#EF4444] border-b border-[#374151] pb-2 flex justify-between">
           <span>安全风险列表</span>
         </h2>
         <div class="flex-1 overflow-y-auto space-y-3 pr-1">
-          <div v-for="alert in alerts" :key="alert.id" @click="goToDetail(alert.id)" class="flex gap-3 bg-[#111827] rounded-lg p-3 border border-[#374151] hover:border-[#EF4444] cursor-pointer transition-colors group">
+          <div v-for="alert in alerts" :key="alert.id" @click="goToDetail(alert.id)" class="flex gap-3 bg-[#2B528C] rounded-lg p-3 border border-[#374151] hover:border-[#EF4444] cursor-pointer transition-colors group">
             <img :src="alert.img" class="w-20 h-20 object-cover rounded border border-[#374151] group-hover:border-[#EF4444]" />
             <div class="flex-1 flex flex-col justify-between">
               <div class="flex justify-between items-start"><span class="text-[#EF4444] font-bold text-sm">{{ alert.type }}</span><span class="text-xs text-gray-500 font-mono">{{ alert.time }}</span></div>
