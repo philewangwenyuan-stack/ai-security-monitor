@@ -14,25 +14,30 @@ class SecurityVLMClient:
         )
         self.model_name = settings.LLM_MODEL_NAME
             
-        # 专为安防监控定制的 Prompt
+        # 【优化1】：加入“否定出口”和“思维链”的全新 Prompt
         self.system_prompt = """
-        你是一个严谨的工业安全监控视觉解析引擎。请结合监控画面，检测是否存在违规或危险事件。
+        你是一个极其严谨的工业安全监控视觉解析引擎。请结合监控画面，检测是否存在明确的违规或危险事件。
         
-        【检测重点】：
-        1. 未戴安全帽
-        2. 未穿反光衣
-        3. 高空作业未穿戴安全绳
-        4. 烟雾或明火
-        5. 人员倒地
-        6. 基坑/临边洞口无防护
-        7. 电箱周边堆放杂物/堵塞
-        8. 电气设备旁易燃易爆物
-        9. 脚手架上堆材料
-        【输出规则（极度重要）】：
-        你必须且只能返回一个合法的 JSON 对象，不要包含任何 Markdown 标记（如 ```json），不要有任何解释性文字。
-        如果画面正常，返回：{"has_issue": false, "alerts": []}
-        如果有问题，请根据画面目标的真实位置，返回百分比坐标（x:左上角X轴百分比, y:左上角Y轴百分比, w:宽度百分比, h:高度百分比，值在0-100之间），格式如下：
+        【核心原则：宁缺毋滥，拒绝脑补】
+        1. "没有违规"是画面的常态。如果没有 100% 的把握看清，或者画面模糊，必须认为“正常”。
+        2. 绝不猜测画面外的内容，绝不将正常作业动作误判为违规。
+        3. 仅限检测以下9种违规：未戴安全帽、未穿反光衣、高空作业未穿戴安全绳、烟雾或明火、人员倒地、基坑/临边洞口无防护、电箱周边堆放杂物/堵塞、电气设备旁易燃易爆物、脚手架上堆材料。
+
+        【输出规则（极度重要）】
+        你必须且只能返回一个合法的 JSON 对象，不要包含 ```json 标记。
+        
+        你必须先在 `scene_description` 中客观描述画面里的人和物，然后再判断是否有违规！
+
+        如果画面正常（无明确违规），严格按此格式返回：
         {
+            "scene_description": "画面中有一名工人正在行走，头部佩戴了黄色安全帽...",
+            "has_issue": false,
+            "alerts": []
+        }
+
+        如果有上述9种明确违规之一，返回百分比坐标（x:左上角X百分比, y:左上角Y百分比, w:宽度百分比, h:高度百分比，值在0-100之间）：
+        {
+            "scene_description": "画面左侧有一名工人正在操作，但他头上没有佩戴安全帽...",
             "has_issue": true,
             "alerts": [
                 {
@@ -51,7 +56,6 @@ class SecurityVLMClient:
         print(f"[{datetime.now().strftime('%H:%M:%S')}] 正在提交 [{camera_name}] 的截图至大模型进行分析...")
         
         try:
-            # 直接将内存中的 bytes 转为 base64
             base64_image = base64.b64encode(image_bytes).decode('utf-8')
             image_url = f"data:image/jpeg;base64,{base64_image}"
 
@@ -63,22 +67,25 @@ class SecurityVLMClient:
                     {
                         "role": "user",
                         "content": [
-                            {"type": "text", "text": "请仔细检查此监控画面是否有安全隐患。"},
+                            {"type": "text", "text": "请仔细检查此监控画面是否有安全隐患。先描述画面，再给出结论。"},
                             {"type": "image_url", "image_url": {"url": image_url}},
                         ],
                     },
                 ],
-                # 如果你的代理接口支持强制 JSON 输出，可以保留下面这行；如果不报错但无效也没关系，我们在下面会手动清洗
-                # response_format={"type": "json_object"} 
+                # # 【优化2】：在这里设置 temperature 和 top_p 降低幻觉
+                # temperature=0.1,  # 极低温度：让模型变得极其保守和确定，不再发散思维
+                # top_p=0.5         # 核心采样：进一步限制它产生“意外”词汇的概率
             )
             
-            # 获取大模型的原始字符串
+            print("====== 大模型返回结果 ======")
+            print(response.choices[0].message.content)
+            print("==========================")
+
             result_str = response.choices[0].message.content
             
-            # 【核心修复】：清洗大模型返回的“脏数据” (继承自你的原代码逻辑)
+            # 清洗大模型返回的“脏数据”
             result_str = result_str.replace("```json", "").replace("```", "").strip()
             
-            # 尝试提取最外层的 {}
             start_idx = result_str.find('{')
             end_idx = result_str.rfind('}')
             
@@ -87,10 +94,8 @@ class SecurityVLMClient:
             else:
                 json_str = result_str
                 
-            # 解析为 Python 字典
             parsed_data = json.loads(json_str)
             
-            # 注入时间等元数据，方便存入数据库
             parsed_data["analyze_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             parsed_data["camera"] = camera_name
             

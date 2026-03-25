@@ -1,3 +1,7 @@
+> <script lang="ts">
+export default { name: 'Dashboard' }
+</script>
+
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
@@ -44,10 +48,20 @@ onMounted(async () => {
     const historyData = await historyRes.json()
     
     // 将数据存入 alerts 列表。注意要将 /static/... 拼接为完整 HTTP 路径
-    alerts.value = historyData.map((item: any) => ({
-      ...item,
-      img: item.img.startsWith('http') ? item.img : `${backendBaseUrl}${item.img}`
-    }))
+
+    alerts.value = historyData.map((item: any) => {
+    // 兼容前端所需字段与后端模型字段
+    const imgUrl = item.image_url || item.img || '';
+    return {
+        ...item,
+        id: item.id,
+        type: item.issue_type || item.type,
+        time: item.created_at || item.time,
+        camera: item.camera_name || item.camera,
+        desc: item.issue_description || item.desc,
+        img: imgUrl.startsWith('http') ? imgUrl : `${backendBaseUrl}${imgUrl}`
+    }
+    })
     
     if (historyData.length > 0) {
       logs.value.push(`[${new Date().toLocaleTimeString()}] 💾 成功从数据库加载 ${historyData.length} 条历史抓拍记录`)

@@ -29,11 +29,16 @@ onMounted(async () => {
     const currentAlert = historyData.find((item: any) => String(item.id) === String(route.params.id))
     
     if (currentAlert) {
-      alertData.value = {
+    const imgUrl = currentAlert.image_url || currentAlert.img || '';
+    alertData.value = {
         ...currentAlert,
+        type: currentAlert.issue_type || currentAlert.type,
+        camera: currentAlert.camera_name || currentAlert.camera,
+        time: currentAlert.created_at || currentAlert.time,
+        desc: currentAlert.issue_description || currentAlert.desc,
         // 确保图片路径是完整的
-        img: currentAlert.img.startsWith('http') ? currentAlert.img : `${backendBaseUrl}${currentAlert.img}`
-      }
+        img: imgUrl.startsWith('http') ? imgUrl : `${backendBaseUrl}${imgUrl}`
+    }
     } else {
       alertData.value.desc = '未找到该告警记录信息或已被清理'
     }
