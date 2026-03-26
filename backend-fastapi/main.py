@@ -69,6 +69,12 @@ def init_minio():
     except Exception as e:
         print(f"❌ MinIO 初始化失败: {e}")
 
+
+Base.metadata.create_all(bind=engine)
+app = FastAPI(title="AI Security Monitor API")
+
+UPLOAD_DIR = "static/alerts"
+
 #===========================================
 Base.metadata.create_all(bind=engine)
 app = FastAPI(title="AI Security Monitor API")
@@ -297,7 +303,7 @@ async def ai_analysis_task():
             if cam.id not in last_analysis_time:
                 last_analysis_time[cam.id] = 0
                 
-            # 【核心修复1】使用时间差计算，不再使用取模，完美解决时间跳过导致漏帧的问题
+            # 使用时间差计算，不再使用取模，完美解决时间跳过导致漏帧的问题
             if current_time - last_analysis_time[cam.id] >= cam.capture_interval:
                 frame_bytes = stream_manager.frames.get(cam.id)
                 if not frame_bytes: 
@@ -316,6 +322,7 @@ async def ai_analysis_task():
 @app.on_event("startup")
 async def startup_event():
     # 启动时，从真实的 MySQL 数据库读取所有激活的摄像头并开始拉流！
+    init_minio()  
     db = next(get_db())
     cameras = db.query(DBCamera).filter(DBCamera.is_active == True).all()
     for cam in cameras:
